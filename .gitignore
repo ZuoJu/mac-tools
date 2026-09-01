@@ -1,0 +1,36 @@
+# 构建产物
+.build/
+build/
+DerivedData/
+
+# Xcode / SwiftPM 本地状态
+*.xcodeproj
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+.swiftpm/
+*.playground/
+
+# macOS 系统文件
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 密钥与本地环境(防御性:任何本地密钥/环境文件一律不入库)
+.env
+.env.*
+*.pem
+*.p12
+*.key
+secrets.*
+*secret*.local.*
+
+# 本地调试产物
+*.log
+*-state-dump.json
