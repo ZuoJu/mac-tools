@@ -22,6 +22,13 @@ struct HotKeyRecorder: View {
                 stopRecording()
             }
         }
+        // 切到其他应用不会触发 onDisappear，不能把热键留在暂停状态。
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
+            if recording { stopRecording() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            if recording { stopRecording() }
+        }
     }
 
     private func toggleRecording() {

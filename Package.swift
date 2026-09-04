@@ -21,22 +21,24 @@ let package = Package(
         // 功能模块四：区域截图 + 标注（Snip/清理风格）
         .target(name: "ScreenshotFeature", dependencies: ["CoreKit"]),
         // 功能模块五：AI 翻译（截图 OCR 翻译 + 文本翻译，OpenAI 兼容服务）
-        .target(name: "TranslateFeature", dependencies: ["CoreKit"]),
+        .target(name: "TranslateFeature", dependencies: ["CoreKit", "ScreenshotFeature"]),
+        .target(name: "TrackpadBridge", publicHeadersPath: "include"),
+        .target(name: "TrackpadFeature", dependencies: ["CoreKit", "TrackpadBridge"]),
         // 组合根：状态栏入口、面板、设置窗口
         .executableTarget(
             name: "MacToolsApp",
-            dependencies: ["CoreKit", "ClipboardFeature", "MenuBarFeature", "ScrollFeature", "ScreenshotFeature", "TranslateFeature"]
+            dependencies: ["CoreKit", "ClipboardFeature", "MenuBarFeature", "ScrollFeature", "ScreenshotFeature", "TranslateFeature", "TrackpadFeature"]
         ),
         // 自包含测试运行器：环境仅有 Command Line Tools（无 Xcode/XCTest），
         // 用可执行目标 + 退出码承载单测，`swift run MacToolsTestRunner` 执行。
         .executableTarget(
             name: "MacToolsTestRunner",
-            dependencies: ["CoreKit", "ClipboardFeature", "MenuBarFeature", "ScrollFeature", "ScreenshotFeature", "TranslateFeature"]
+            dependencies: ["CoreKit", "ClipboardFeature", "MenuBarFeature", "ScrollFeature", "ScreenshotFeature", "TranslateFeature", "TrackpadFeature"]
         ),
         // UI 预览渲染器：把面板 SwiftUI 视图离屏渲染为 PNG，便于无界面环境做视觉检查。
         .executableTarget(
             name: "MacToolsUIRender",
-            dependencies: ["CoreKit", "ClipboardFeature", "MenuBarFeature", "ScrollFeature", "ScreenshotFeature", "TranslateFeature"]
+            dependencies: ["CoreKit", "ClipboardFeature", "MenuBarFeature", "ScrollFeature", "ScreenshotFeature", "TranslateFeature", "TrackpadFeature"]
         ),
     ]
 )

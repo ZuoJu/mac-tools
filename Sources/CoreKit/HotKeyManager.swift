@@ -96,7 +96,8 @@ public final class HotKeyManager: ObservableObject {
 
     /// 录制新快捷键时暂停热键：否则当前已注册的组合会被系统吞掉，
     /// 录制器永远录不到自己（KeyboardShortcuts 的 isPaused 同款处理）。
-    private var paused = false
+    @Published public private(set) var isPaused = false
+    private var resignActiveObserver: NSObjectProtocol?
 
     /// 动作回调：参数为注册时的 id。
     public var onAction: ((String) -> Void)?
@@ -109,7 +110,16 @@ public final class HotKeyManager: ObservableObject {
     private let signature: FourCharCode = 0x4D43544C // "MCTL"
     private let lock = NSLock()
 
-    private init() {}
+    private init() {
+        // 录制只属于前台设置窗口，切到其他应用后必须恢复全局热键。
+        resignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.setPaused(false)
+        }
+    }
 
     // MARK: - 注册
 
@@ -141,6 +151,8 @@ public final class HotKeyManager: ObservableObject {
         var snapshot: [String: Any] = [
             "isRegistered": isRegistered,
             "registeredCombos": comboCount,
+            "isPaused": isPaused,
+            "activeRegistrations": carbonRefs.count,
         ]
         if let error = lastRegistrationError { snapshot["error"] = error }
         if let fired = lastFired {
@@ -152,9 +164,8 @@ public final class HotKeyManager: ObservableObject {
 
     /// 暂停/恢复全部热键（快捷键录制期间暂停，避免组合被自己吞掉）。
     public func setPaused(_ paused: Bool) {
-        lock.lock()
-        self.paused = paused
-        lock.unlock()
+        guard isPaused != paused else { return }
+        isPaused = paused
         refresh()
     }
 
@@ -162,7 +173,7 @@ public final class HotKeyManager: ObservableObject {
     private func refresh() {
         teardownCarbon()
         lock.lock()
-        let paused = self.paused
+        let paused = self.isPaused
         let combos = registeredCombos
         lock.unlock()
 

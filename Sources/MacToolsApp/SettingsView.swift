@@ -121,6 +121,9 @@ struct SettingsView: View {
     }
 
     private var hotKeyStatusText: String {
+        if hotKeyManager.isPaused {
+            return "录制中，快捷键暂时停用"
+        }
         if !hotKeyManager.isRegistered {
             return "注册失败，请更换组合后重试"
         }

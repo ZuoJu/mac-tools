@@ -6,6 +6,7 @@ import ScrollFeature
 import ScreenshotFeature
 import SwiftUI
 import TranslateFeature
+import TrackpadFeature
 
 /// 离屏渲染面板 UI 为 PNG：`swift run MacToolsUIRender <输出目录>`
 /// 用于无交互环境下检查面板视觉效果。
@@ -72,6 +73,15 @@ func render<V: View>(_ view: V, size: NSSize, name: String, appearance: NSAppear
     try? png.write(to: url)
     print("✅ \(url.path)")
 }
+
+render(LevelHUDView(side: .brightness, value: 0.1), size: NSSize(width: 270, height: 64), name: "trackpad-brightness-hud.png")
+render(LevelHUDView(side: .volume, value: 0.1), size: NSSize(width: 270, height: 64), name: "trackpad-volume-hud-dark.png", appearance: .darkAqua)
+render(LevelHUDView(side: .brightness, value: 1), size: NSSize(width: 270, height: 64), name: "trackpad-brightness-hud-100.png")
+if CommandLine.arguments.contains("--level-hud-only") { exit(0) }
+
+let trackpadPreview = TrackpadController()
+render(TrackpadPanelView(controller: trackpadPreview), size: NSSize(width: 500, height: 640), name: "trackpad-panel.png")
+render(TrackpadPanelView(controller: trackpadPreview), size: NSSize(width: 500, height: 640), name: "trackpad-panel-dark.png", appearance: .darkAqua)
 
 func clipItem(
     kind: ClipboardKind,

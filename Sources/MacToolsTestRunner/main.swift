@@ -451,6 +451,14 @@ func runHotKeyTests(_ t: TestRunner) {
     t.expectTrue(!manager.isRegistered, "暂停后热键不再注册")
     manager.setPaused(false)
     t.expectTrue(manager.isRegistered && manager.lastRegistrationSucceeded, "恢复后热键重新注册")
+    // 录制未完成就切到其他应用：视图仍在，但全局注册必须恢复。
+    manager.setPaused(true)
+    NotificationCenter.default.post(name: NSApplication.willResignActiveNotification, object: NSApplication.shared)
+    t.expectTrue(!manager.isPaused && manager.isRegistered, "录制期间切到后台自动恢复全局热键")
+    // 返回设置页时不应重新进入暂停，也不应因重复失活通知取消注册。
+    NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
+    NotificationCenter.default.post(name: NSApplication.willResignActiveNotification, object: NSApplication.shared)
+    t.expectTrue(!manager.isPaused && manager.lastRegistrationSucceeded, "反复切换前后台保持热键注册")
     manager.unregister(id: "test.combo")
     t.expectTrue(!manager.isRegistered, "注销后无注册组合")
 }
@@ -994,6 +1002,7 @@ runMenuBarLayoutTests(runner)
 runMenuBarPersistenceTests(runner, tempRoot: tempRoot)
 runScrollLogicTests(runner)
 runHotKeyTests(runner)
+runTrackpadTests(runner)
 runHotKeyConflictTests(runner)
 runAnnotationTests(runner)
 runCaptureSessionScaleTests(runner)

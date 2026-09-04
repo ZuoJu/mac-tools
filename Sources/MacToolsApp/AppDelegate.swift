@@ -7,6 +7,7 @@ import MenuBarFeature
 import ScrollFeature
 import ScreenshotFeature
 import TranslateFeature
+import TrackpadFeature
 
 /// 组合根：装配各功能模块、状态栏入口、面板、快捷键与设置。
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -15,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var monitor: ClipboardMonitor!
     private var menuBarController: MenuBarController!
     private var scrollReverser: ScrollReverser!
+    private var trackpadController: TrackpadController!
     private var screenshotCoordinator: ScreenshotCoordinator!
     private var translationSettings: TranslationSettings!
     private var translationService: TranslationService!
@@ -44,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menuBarController = MenuBarController()
         scrollReverser = ScrollReverser()
+        trackpadController = TrackpadController()
+        trackpadController.start()
         screenshotCoordinator = ScreenshotCoordinator()
 
         translationSettings = TranslationSettings()
@@ -90,6 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // 调试/自动化测试辅助：启动后自动打开面板或设置窗口
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--debug-open-trackpad") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.openModuleWindow(.trackpad) }
+        }
         if arguments.contains("--debug-open-panel") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self else { return }
@@ -121,6 +128,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let state: [String: Any] = [
                 "scroll": self.scrollReverser.debugSnapshot(),
                 "hotkey": HotKeyManager.shared.debugSnapshot(),
+                "trackpad": self.trackpadController.debugSnapshot(),
+                "clipboardPanel": self.panelController.debugSnapshot(),
+                "application": [
+                    "isActive": NSApp.isActive,
+                    "clipboardPanelVisible": self.panelController.panel.isVisible,
+                    "clipboardPanelIsKey": self.panelController.panel.isKeyWindow,
+                    "screenshotSelecting": self.screenshotCoordinator.isSelecting,
+                    "screenCapturePermission": ScreenCaptureService.hasPermission(),
+                ],
                 "mainMenuEditItems": NSApp.mainMenu?
                     .items.first { $0.submenu?.title == "编辑" }?
                     .submenu?.items.count ?? 0,
@@ -157,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         monitor?.stop()
         menuBarController?.restorePositions()
         scrollReverser?.destroy()
+        trackpadController?.stop()
         screenshotCoordinator?.closeAllPinned()
         // 剪贴板历史是防抖落盘（0.5s），退出前强制刷盘避免最后几条丢失
         clipboardStore?.persistNowSync()
@@ -181,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if NSApp.currentEvent?.type == .rightMouseUp {
             showContextMenu()
         } else {
-            panelController.toggle(statusItemButton: statusItem?.button)
+            panelController.toggle(statusItemButton: statusItem?.button, fromStatusItemClick: true)
         }
     }
 
@@ -334,6 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case menuBar
         case scroll
         case screenshot
+        case trackpad
 
         var menuTitle: String {
             switch self {
@@ -341,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case .menuBar: return "菜单栏图标管理…"
             case .scroll: return "滚轮方向设置…"
             case .screenshot: return "截图…"
+            case .trackpad: return "触摸板边缘控制…"
             }
         }
 
@@ -350,6 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case .menuBar: return "菜单栏图标管理"
             case .scroll: return "滚轮方向"
             case .screenshot: return "截图"
+            case .trackpad: return "触摸板边缘控制"
             }
         }
 
@@ -359,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case .menuBar: return "menubar.rectangle"
             case .scroll: return "computermouse"
             case .screenshot: return "camera.viewfinder"
+            case .trackpad: return "hand.draw"
             }
         }
     }
@@ -386,6 +407,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             rootView = AnyView(ScrollPanelView(reverser: scrollReverser, settings: settings))
         case .screenshot:
             rootView = AnyView(ScreenshotPanelView(coordinator: screenshotCoordinator, settings: settings))
+        case .trackpad:
+            rootView = AnyView(TrackpadPanelView(controller: trackpadController))
         }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 640),

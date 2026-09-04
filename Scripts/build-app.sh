@@ -18,8 +18,8 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# 固定 identifier 的 ad-hoc 签名：辅助功能/屏幕录制权限按签名指纹记录，
-# 固定 identifier 可减少重复构建产生的多个授权条目。
+# ad-hoc 签名的授权身份包含本次构建的 cdhash；固定 identifier 并不能
+# 让辅助功能/屏幕录制授权跨构建保留。更新后若权限失效，需正常重新授权。
 codesign --force --identifier "com.mactools.app" --sign - "$APP" 2>/dev/null || codesign --force --sign - "$APP" 2>/dev/null || true
 
 echo "✅ 构建完成: $APP"

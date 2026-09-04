@@ -17,7 +17,9 @@ final class Panel: NSPanel {
         titlebarAppearsTransparent = true
         isMovableByWindowBackground = false
         isReleasedWhenClosed = false
-        hidesOnDeactivate = true
+        // 非激活面板本来就允许宿主应用在后台；不要再由应用失活自动隐藏。
+        // 关闭统一走 windowDidResignKey，避免隐藏状态与 toggle 的可见判断不同步。
+        hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = false
         standardWindowButton(.closeButton)?.isHidden = true
         standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -36,6 +38,22 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private var escMonitor: Any?
     private var lastResignKeyAt = Date.distantPast
+    private var lastShownAt: Date?
+    private var lastClosedAt: Date?
+    private var visibleAfterShow = false
+    private var keyAfterShow = false
+
+    func debugSnapshot() -> [String: Any] {
+        var result: [String: Any] = [
+            "isVisible": panel.isVisible,
+            "isKey": panel.isKeyWindow,
+            "visibleAfterShow": visibleAfterShow,
+            "keyAfterShow": keyAfterShow,
+        ]
+        if let lastShownAt { result["lastShownAt"] = lastShownAt.timeIntervalSince1970 }
+        if let lastClosedAt { result["lastClosedAt"] = lastClosedAt.timeIntervalSince1970 }
+        return result
+    }
 
     init<V: View>(rootView: V, size: NSSize = NSSize(width: 480, height: 640)) {
         panel = Panel(contentRect: NSRect(origin: .zero, size: size))
@@ -57,17 +75,18 @@ final class PanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    func toggle(statusItemButton: NSStatusBarButton?) {
+    func toggle(statusItemButton: NSStatusBarButton?, fromStatusItemClick: Bool = false) {
         if panel.isVisible {
             close()
             return
         }
         // 刚因点击状态栏图标而失焦关闭时，这次点击视为“关闭”而非重新打开
-        if Date().timeIntervalSince(lastResignKeyAt) < 0.3 { return }
+        if fromStatusItemClick && Date().timeIntervalSince(lastResignKeyAt) < 0.3 { return }
         show(below: statusItemButton)
     }
 
     func close() {
+        lastClosedAt = Date()
         panel.orderOut(nil)
     }
 
@@ -76,6 +95,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         // 非激活面板必须用 orderFrontRegardless：应用处于后台时也能直接显示（Maccy 同款）
         panel.orderFrontRegardless()
         panel.makeKey()
+        lastShownAt = Date()
+        visibleAfterShow = panel.isVisible
+        keyAfterShow = panel.isKeyWindow
         onShow?()
     }
 
