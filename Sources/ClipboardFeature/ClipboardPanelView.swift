@@ -16,11 +16,13 @@ public struct ClipboardPanelView: View {
     public init(
         store: ClipboardStore,
         settings: SettingsStore,
-        onCopyItem: @escaping (ClipboardItem) -> Void
+        onCopyItem: @escaping (ClipboardItem) -> Void,
+        showsClearConfirmation: Bool = false
     ) {
         self.store = store
         self.settings = settings
         self.onCopyItem = onCopyItem
+        _confirmClear = State(initialValue: showsClearConfirmation)
     }
 
     public var body: some View {
@@ -37,6 +39,13 @@ public struct ClipboardPanelView: View {
             footer
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
+        }
+        // 面板内自绘确认弹层：不用 confirmationDialog——它会以 sheet 形式接管 key
+        // 状态，触发面板失焦自动关闭；overlay 留在同一窗口内，清除后面板保持打开。
+        .overlay {
+            if confirmClear {
+                clearConfirmation
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
@@ -67,6 +76,8 @@ public struct ClipboardPanelView: View {
     }
 
     private var totalCount: Int { store.items.count }
+
+    private var visibleCount: Int { pinnedVisible.count + historyVisible.count }
 
     // MARK: - 子视图
 
@@ -139,20 +150,34 @@ public struct ClipboardPanelView: View {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List {
-                if !pinned.isEmpty {
-                    Section("已固定") {
+            // ScrollView + LazyVStack 而非 List：List 的 NSTableView 桥接层在行内容
+            // 没有系统文本/控件时整行原生点击不可靠（AXPress 正常、鼠标点击被吞），
+            // 自绘行头 + 普通滚动视图没有这层问题。
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    if !pinned.isEmpty {
+                        sectionHeader("已固定 · \(pinned.count)")
                         ForEach(pinned) { row($0) }
                     }
-                }
-                if !history.isEmpty {
-                    Section(historyHeaderTitle) {
+                    if !history.isEmpty {
+                        sectionHeader("\(historyHeaderTitle) · \(history.count)")
                         ForEach(history) { row($0) }
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .listStyle(.plain)
+            .scrollIndicators(.hidden)
         }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.background)
     }
 
     private var historyHeaderTitle: String {
@@ -167,7 +192,9 @@ public struct ClipboardPanelView: View {
             onTogglePin: { store.togglePin(item.id) },
             onDelete: { store.remove(item.id) }
         )
-        .tag(item.id)
+        .overlay(alignment: .bottom) {
+            Divider().padding(.leading, 68)
+        }
     }
 
     private var emptyState: some View {
@@ -187,7 +214,9 @@ public struct ClipboardPanelView: View {
 
     private var footer: some View {
         HStack {
-            Text("共 \(totalCount) 条 · 点击条目复制并关闭面板")
+            Text(visibleCount == totalCount
+                 ? "共 \(totalCount) 条 · 点击条目复制并关闭面板"
+                 : "显示 \(visibleCount) / \(totalCount) 条 · 点击条目复制并关闭面板")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -199,12 +228,59 @@ public struct ClipboardPanelView: View {
             }
             .buttonStyle(.borderless)
             .disabled(store.items.filter { !$0.pinned }.isEmpty)
-            .confirmationDialog("确定清除所有未固定的历史条目？", isPresented: $confirmClear, titleVisibility: .visible) {
-                Button("清除未固定条目", role: .destructive) {
-                    store.clearAll(keepingPinned: true)
+        }
+    }
+
+    private var clearConfirmation: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.black.opacity(0.2))
+                .contentShape(Rectangle())
+                .onTapGesture { confirmClear = false }
+            VStack(spacing: 12) {
+                Image(systemName: "trash")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.red)
+                Text("确定清除所有未固定的历史条目？")
+                    .font(.system(size: 14, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                Text("已固定条目将保留，清除后不可恢复。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 10) {
+                    Button {
+                        confirmClear = false
+                    } label: {
+                        Text("取消")
+                            .font(.system(size: 13))
+                            .frame(width: 118, height: 26)
+                            .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.12)))
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        confirmClear = false
+                        store.clearAll(keepingPinned: true)
+                    } label: {
+                        Text("清除未固定条目")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 118, height: 26)
+                            .background(Color.red, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
                 }
-                Button("取消", role: .cancel) {}
+                .padding(.top, 4)
             }
+            .padding(20)
+            .frame(width: 300)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.22), radius: 16, y: 5)
+            )
+            .padding(24)
         }
     }
 }

@@ -13,6 +13,8 @@ struct ClipboardRowView: View {
     @State private var hovering = false
 
     var body: some View {
+        // 列表已改为 ScrollView，因此点击手势不再受 NSTableView 吞掉。这里不用
+        // Button 包住整行：macOS 中嵌套 Button 会让固定/删除也可能触发“复制”。
         HStack(spacing: 10) {
             leadingIcon
                 .frame(width: 46, height: 32)
@@ -20,7 +22,6 @@ struct ClipboardRowView: View {
                 Text(item.displayTitle)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
-                    .textSelection(.enabled)
                 Text(metaText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -28,29 +29,34 @@ struct ClipboardRowView: View {
             }
             Spacer(minLength: 4)
             if hovering {
-                Button(action: onTogglePin) {
-                    Image(systemName: item.pinned ? "pin.slash" : "pin")
-                        .font(.system(size: 11))
-                }
-                .buttonStyle(.borderless)
-                .help(item.pinned ? "取消固定" : "固定")
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                }
-                .buttonStyle(.borderless)
-                .help("删除")
+                actionButton(
+                    symbol: item.pinned ? "pin.slash" : "pin",
+                    help: item.pinned ? "取消固定" : "固定",
+                    action: onTogglePin
+                )
+                actionButton(
+                    symbol: "trash",
+                    tint: .red,
+                    help: "删除",
+                    action: onDelete
+                )
             } else if item.pinned {
                 Image(systemName: "pin.fill")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange)
+                    .frame(width: 26, height: 26)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
         .contentShape(Rectangle())
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(hovering ? Color.accentColor.opacity(0.10) : .clear)
+                .padding(.horizontal, 6)
+        }
         .onHover { hovering = $0 }
-        .onTapGesture { onCopy() }
+        .gesture(TapGesture().onEnded(onCopy), including: .gesture)
         .contextMenu {
             Button(action: onCopy) {
                 Label("复制到剪贴板", systemImage: "doc.on.doc")
@@ -70,6 +76,23 @@ struct ClipboardRowView: View {
                 Label("删除", systemImage: "trash")
             }
         }
+    }
+
+    private func actionButton(
+        symbol: String,
+        tint: Color = .primary,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 26, height: 26)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var leadingIcon: some View {
