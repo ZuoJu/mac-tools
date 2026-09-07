@@ -146,6 +146,14 @@ render(
     name: "clipboard-panel.png"
 )
 
+// MARK: - 剪贴板面板（清除未固定确认弹层）
+
+render(
+    ClipboardPanelView(store: clipStore, settings: .shared, onCopyItem: { _ in }, showsClearConfirmation: true),
+    size: NSSize(width: 480, height: 600),
+    name: "clipboard-panel-clear-confirm.png"
+)
+
 // MARK: - 剪贴板面板（空状态）
 
 let emptyStore = ClipboardStore(
@@ -317,6 +325,52 @@ func renderTranslatePanels() {
 }
 
 renderTranslatePanels()
+
+// MARK: - 截图翻译覆盖层（默认覆盖 / 上译下图对照）
+
+func renderScreenshotTranslationOverlay() {
+    let image = NSImage(size: NSSize(width: 520, height: 260))
+    image.lockFocus()
+    NSColor(calibratedRed: 0.10, green: 0.16, blue: 0.25, alpha: 1).setFill()
+    NSRect(origin: .zero, size: image.size).fill()
+    let titleAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 22, weight: .semibold),
+        .foregroundColor: NSColor.white,
+    ]
+    let bodyAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 15),
+        .foregroundColor: NSColor.white.withAlphaComponent(0.72),
+    ]
+    "Quick setup guide".draw(at: NSPoint(x: 34, y: 178), withAttributes: titleAttributes)
+    "Select a region and the translation appears immediately.".draw(at: NSPoint(x: 34, y: 138), withAttributes: bodyAttributes)
+    "You can compare the translation with the original image.".draw(at: NSPoint(x: 34, y: 112), withAttributes: bodyAttributes)
+    image.unlockFocus()
+
+    let record = TranslationRecord(
+        sourceText: "Quick setup guide\nSelect a region and the translation appears immediately.",
+        translatedText: "快速使用指南\n框选区域后，译文会立即显示在原来的位置。",
+        sourceLanguage: "en",
+        targetLanguage: "zh-Hans",
+        fromScreenshot: true
+    )
+    let overlay = TranslationCoordinator()
+    overlay.injectForPreview(record: record)
+    render(
+        TranslateOverlayView(coordinator: overlay, image: image),
+        size: NSSize(width: 520, height: 310),
+        name: "screenshot-translation-overlay.png"
+    )
+
+    let comparison = TranslationCoordinator()
+    comparison.injectForPreview(record: record, comparisonEnabled: true)
+    render(
+        TranslateOverlayView(coordinator: comparison, image: image),
+        size: NSSize(width: 520, height: 500),
+        name: "screenshot-translation-comparison.png"
+    )
+}
+
+renderScreenshotTranslationOverlay()
 
 // MARK: - 输入框占位对齐验证图（空态 vs 填字态，同几何布局）
 
