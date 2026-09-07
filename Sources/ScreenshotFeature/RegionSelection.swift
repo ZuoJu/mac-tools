@@ -6,10 +6,18 @@ import Foundation
 /// 区域框选：在每块屏幕上铺一层遮罩窗口，拖拽出矩形后可拖边角手柄实时调整，
 /// 回车 / 双击确认，Esc 取消。确认回调给出 AppKit 全局坐标矩形。
 public final class RegionSelectionController: NSObject {
+    public enum ConfirmationMode {
+        /// 保持选区，允许拖动手柄后通过回车或双击确认。
+        case explicit
+        /// 第一次拖拽结束即确认选区，适合截图翻译等一气呵成的流程。
+        case onMouseUp
+    }
+
     private var windows: [SelectionWindow] = []
     let state = SelectionState()
     public var onConfirm: ((CGRect) -> Void)?
     public var onCancel: (() -> Void)?
+    public var confirmationMode: ConfirmationMode = .explicit
     /// 取消 / 确认都会置回 false。
     public var isActive: Bool { !windows.isEmpty }
 
@@ -19,6 +27,7 @@ public final class RegionSelectionController: NSObject {
             let window = SelectionWindow(screen: screen)
             let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.state = state
+            view.confirmationMode = confirmationMode
             view.onConfirm = { [weak self] rect in
                 self?.end()
                 self?.onConfirm?(rect)
@@ -87,6 +96,7 @@ final class SelectionView: NSView {
     var state: SelectionState?
     var onConfirm: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
+    var confirmationMode: RegionSelectionController.ConfirmationMode = .explicit
 
     private var dragOrigin: CGPoint = .zero
     private var resizeHandle: Handle = .none
@@ -187,6 +197,10 @@ final class SelectionView: NSView {
         case .dragging:
             if state.rect != .null, state.rect.width >= 8, state.rect.height >= 8 {
                 state.phase = .adjusting
+                if confirmationMode == .onMouseUp {
+                    confirmIfNeeded()
+                    return
+                }
             } else {
                 state.rect = .null
                 state.phase = .waiting
@@ -229,7 +243,9 @@ final class SelectionView: NSView {
         let rect = localRect
         if rect.isNull || rect.isEmpty {
             // 未开始拖拽时的操作提示
-            let text = "拖拽框选区域 · 回车或双击确认 · Esc 取消"
+            let text = confirmationMode == .onMouseUp
+                ? "拖拽框选区域 · 松开鼠标立即确认 · Esc 取消"
+                : "拖拽框选区域 · 回车或双击确认 · Esc 取消"
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 15, weight: .medium),
                 .foregroundColor: NSColor.white.withAlphaComponent(0.85),

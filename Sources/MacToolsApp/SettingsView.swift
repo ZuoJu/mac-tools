@@ -292,7 +292,7 @@ struct SettingsView: View {
                     HotKeyRecorder(combo: $settings.translateTriggerHotKey)
                 }
                 conflictHint(combo: settings.translateTriggerHotKey, name: "截图翻译")
-                Text("按键或菜单栏右键「截图翻译」后框选屏幕区域，自动识别文字并翻译，结果以浮窗展示。文字识别在本机完成，仅译文会发送到所配置的 AI 服务。")
+                Text("按键或菜单栏右键「截图翻译」后拖拽框选区域，松开鼠标即自动识别并翻译。译文会直接覆盖在截取位置；底部可切换目标语言、复制原文或译文，并开启上下对照。文字识别在本机完成，仅原文会发送到所配置的 AI 服务。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

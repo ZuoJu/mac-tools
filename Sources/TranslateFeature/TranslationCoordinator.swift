@@ -3,14 +3,12 @@ import CoreKit
 import ScreenshotFeature
 import SwiftUI
 
-/// 截图翻译协调器：框选 → 截取 → Vision OCR → AI 翻译 → 气泡浮窗展示。
-/// 复用截图模块的 RegionSelection 框选与 ScreenCaptureService 截取；
-/// 翻译走 TranslationService（与文本翻译同一接口）。
+/// 截图翻译协调器：框选后立即截取、OCR、翻译，并直接在截取区域呈现结果。
+/// 普通模式用译文覆盖原截图区域；对照模式在上方放译文、下方保留原截图。
 public final class TranslationCoordinator: NSObject, ObservableObject {
     @Published public private(set) var isSelecting = false
 
-    /// 气泡当前状态（驱动浮窗 UI）。
-    public enum BubbleState: Equatable {
+    public enum OverlayState: Equatable {
         case idle
         case recognizing
         case translating(original: String)
@@ -18,28 +16,32 @@ public final class TranslationCoordinator: NSObject, ObservableObject {
         case failed(message: String)
     }
 
-    @Published public private(set) var bubbleState: BubbleState = .idle
+    @Published public private(set) var overlayState: OverlayState = .idle
+    @Published public private(set) var targetLanguageCode = "zh-Hans"
+    @Published public private(set) var isComparisonEnabled = false
 
     private let selection = RegionSelectionController()
     private let service: TranslationService
-    private var bubblePanel: NSPanel?
+    private var overlayPanel: NSPanel?
     private var escMonitor: Any?
     private var runningTask: Task<Void, Never>?
-    /// 截取区域（气泡定位用）。
+    private var capturedImage: NSImage?
+    private var recognizedOriginalText: String?
+    /// 截取区域用于让默认译文覆盖原位置；对照模式则以它的底边对齐原图。
     private var captureRect: CGRect = .zero
-    /// 流程代数：新一轮截图翻译开始时自增；在途旧任务的气泡更新
-    /// 因代数不匹配被丢弃，避免旧失败覆盖新气泡状态（取消竞态）。
+    /// 每轮流程递增，防止旧请求覆盖后一次截图或重新翻译的结果。
     private var flowGeneration = 0
 
     /// 服务配置与历史由组合根注入。
     public var settingsProvider: (() -> TranslationSettings?)?
     public var history: TranslationHistoryStore?
-    /// 目标语言提供方（默认取设置里的默认目标语言）。
     public var targetLanguageProvider: (() -> Language?)?
 
     public init(service: TranslationService = TranslationService()) {
         self.service = service
         super.init()
+        // 截图翻译是一气呵成的操作；普通截图仍沿用默认的回车/双击确认模式。
+        selection.confirmationMode = .onMouseUp
         selection.onConfirm = { [weak self] rect in
             self?.process(rect: rect)
         }
@@ -50,7 +52,7 @@ public final class TranslationCoordinator: NSObject, ObservableObject {
 
     // MARK: - 入口
 
-    /// 触发截图翻译：检查屏幕录制权限 → 开始框选。
+    /// 触发截图翻译：检查屏幕录制权限后开始框选。松开鼠标即截取并翻译。
     public func startCaptureTranslate() {
         guard !isSelecting else { return }
         guard ScreenCaptureService.hasPermission() else {
@@ -62,13 +64,60 @@ public final class TranslationCoordinator: NSObject, ObservableObject {
             FeedbackHUD.show("请先到「设置 → 翻译」配置翻译服务", success: false)
             return
         }
-        // 新一次截图翻译开始时，取消进行中的旧任务并关掉旧气泡
         cancelRunning()
         isSelecting = true
         selection.begin()
     }
 
-    // MARK: - 流程
+    // MARK: - 交互
+
+    /// 切换目标语言时直接复用 OCR 原文重新翻译，无需重新截图。
+    public func selectTargetLanguage(code: String) {
+        guard LanguageCatalog.language(forCode: code) != nil, code != targetLanguageCode else { return }
+        targetLanguageCode = code
+        guard let original = recognizedOriginalText, !original.isEmpty else { return }
+
+        runningTask?.cancel()
+        flowGeneration += 1
+        let generation = flowGeneration
+        runningTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.translate(original: original, targetCode: code, generation: generation)
+        }
+    }
+
+    public func setComparisonEnabled(_ enabled: Bool) {
+        guard isComparisonEnabled != enabled else { return }
+        isComparisonEnabled = enabled
+        resizeOverlay()
+    }
+
+    public func copyOriginal() {
+        guard let original = recognizedOriginalText, !original.isEmpty else { return }
+        copy(original, feedback: "原文已复制")
+    }
+
+    public func copyTranslation() {
+        guard case .done(let record) = overlayState else { return }
+        copy(record.translatedText, feedback: "译文已复制")
+    }
+
+    public func closeOverlay() {
+        cancelRunning()
+    }
+
+    /// 离屏渲染器与 UI 回归检查用：构造已完成的截图翻译状态，不发起 OCR 或网络请求。
+    public func injectForPreview(
+        record: TranslationRecord,
+        comparisonEnabled: Bool = false
+    ) {
+        targetLanguageCode = record.targetLanguage
+        recognizedOriginalText = record.sourceText
+        isComparisonEnabled = comparisonEnabled
+        overlayState = .done(record: record)
+    }
+
+    // MARK: - 翻译流程
 
     private func process(rect: CGRect) {
         isSelecting = false
@@ -77,53 +126,71 @@ public final class TranslationCoordinator: NSObject, ObservableObject {
             return
         }
         captureRect = rect
+        capturedImage = image
+        recognizedOriginalText = nil
+        isComparisonEnabled = false
+        targetLanguageCode = (targetLanguageProvider?()
+            ?? settingsProvider?().flatMap { LanguageCatalog.language(forCode: $0.defaultTargetCode) }
+            ?? LanguageCatalog.all[0]).code
+
         flowGeneration += 1
         let generation = flowGeneration
-        showBubble(state: .recognizing, near: rect)
+        showOverlay(state: .recognizing, image: image)
 
-        runningTask = Task { [weak self] in
+        runningTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let original = try await OCRService.recognizeText(in: image)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.flowGeneration == generation else { return }
                 let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else {
-                    self.updateBubble(.failed(message: TranslationError.noTextInImage.errorDescription ?? "未识别到文字"), generation: generation)
+                    self.updateOverlay(.failed(message: TranslationError.noTextInImage.errorDescription ?? "未识别到文字"), generation: generation)
                     return
                 }
-                self.updateBubble(.translating(original: trimmed), generation: generation)
-
-                guard let settings = self.settingsProvider?() else { return }
-                let target = self.targetLanguageProvider?()
-                    ?? LanguageCatalog.language(forCode: settings.defaultTargetCode)
-                    ?? LanguageCatalog.all[0]
-                let outcome = try await self.service.translate(
-                    TranslationQuery(text: trimmed, source: nil, target: target),
-                    settings: settings
-                )
-                guard !Task.isCancelled else { return }
-                let record = TranslationRecord(
-                    sourceText: trimmed,
-                    translatedText: outcome.translatedText,
-                    sourceLanguage: LanguageCatalog.auto.code,
-                    targetLanguage: target.code,
-                    fromScreenshot: true
-                )
-                // 历史存储是 @Published：写入必须回主线程
-                await MainActor.run {
-                    guard self.flowGeneration == generation else { return }
-                    self.history?.add(record)
-                }
-                self.updateBubble(.done(record: record), generation: generation)
+                self.recognizedOriginalText = trimmed
+                await self.translate(original: trimmed, targetCode: self.targetLanguageCode, generation: generation)
             } catch let error as TranslationError where error == .cancelled {
-                // 用户取消：静默收场
+                // 用户关闭面板：静默结束。
             } catch let error as TranslationError {
                 guard !Task.isCancelled else { return }
-                self.updateBubble(.failed(message: error.errorDescription ?? "翻译失败"), generation: generation)
+                self.updateOverlay(.failed(message: error.errorDescription ?? "翻译失败"), generation: generation)
             } catch {
                 guard !Task.isCancelled else { return }
-                self.updateBubble(.failed(message: error.localizedDescription), generation: generation)
+                self.updateOverlay(.failed(message: error.localizedDescription), generation: generation)
             }
+        }
+    }
+
+    private func translate(original: String, targetCode: String, generation: Int) async {
+        guard let settings = settingsProvider?(),
+              let target = LanguageCatalog.language(forCode: targetCode) else {
+            updateOverlay(.failed(message: "翻译配置无效，请检查设置"), generation: generation)
+            return
+        }
+        updateOverlay(.translating(original: original), generation: generation)
+        do {
+            let outcome = try await service.translate(
+                TranslationQuery(text: original, source: nil, target: target),
+                settings: settings
+            )
+            guard !Task.isCancelled, flowGeneration == generation else { return }
+            let record = TranslationRecord(
+                sourceText: original,
+                translatedText: outcome.translatedText,
+                sourceLanguage: LanguageCatalog.auto.code,
+                targetLanguage: target.code,
+                fromScreenshot: true
+            )
+            history?.add(record)
+            updateOverlay(.done(record: record), generation: generation)
+        } catch let error as TranslationError where error == .cancelled {
+            // 用户切换语言或关闭面板时取消旧请求，不显示错误。
+        } catch let error as TranslationError {
+            guard !Task.isCancelled else { return }
+            updateOverlay(.failed(message: error.errorDescription ?? "翻译失败"), generation: generation)
+        } catch {
+            guard !Task.isCancelled else { return }
+            updateOverlay(.failed(message: error.localizedDescription), generation: generation)
         }
     }
 
@@ -131,84 +198,106 @@ public final class TranslationCoordinator: NSObject, ObservableObject {
         runningTask?.cancel()
         runningTask = nil
         flowGeneration += 1
-        closeBubble()
+        closeOverlayPanel()
     }
 
-    // MARK: - 气泡浮窗
-
-    private func updateBubble(_ state: BubbleState, generation: Int) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard self.flowGeneration == generation else { return } // 旧流程的迟到更新直接丢弃
-            self.bubbleState = state
-            if state == .idle { self.closeBubble() }
-        }
+    private func updateOverlay(_ state: OverlayState, generation: Int) {
+        guard flowGeneration == generation else { return }
+        overlayState = state
     }
 
-    private func showBubble(state: BubbleState, near rect: CGRect) {
-        let view = TranslateBubbleView(
-            coordinator: self,
-            onCopy: { text in
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                FeedbackHUD.show("译文已复制")
-            },
-            onClose: { [weak self] in
-                self?.cancelRunning()
-            }
-        )
-        let hosting = NSHostingView(rootView: view)
-        hosting.layoutSubtreeIfNeeded()
-        // 高度与视图 maxHeight(300) 对齐：过矮会裁剪长译文
-        let contentSize = NSSize(width: 400, height: 300)
+    private func copy(_ text: String, feedback: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        FeedbackHUD.show(feedback)
+    }
+
+    // MARK: - 截图内译文覆盖层
+
+    private func showOverlay(state: OverlayState, image: NSImage) {
         let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: contentSize),
-            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
+            contentRect: NSRect(origin: .zero, size: overlaySize),
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.title = "截图翻译"
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-        panel.standardWindowButton(.closeButton)?.isHidden = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = hosting
 
-        // 优先显示在截取区域下方；放不下则放上方；整体夹在屏幕可见区域内
-        let screen = NSScreen.screens.first { $0.frame.intersects(rect) } ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        var origin = NSPoint(x: rect.minX, y: rect.minY - contentSize.height - 10)
-        if origin.y < visible.minY {
-            origin.y = rect.maxY + 10
-        }
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - contentSize.width - 8)
-        origin.y = max(origin.y, visible.minY + 8)
-        panel.setFrameOrigin(origin)
+        let hosting = NSHostingView(rootView: TranslateOverlayView(coordinator: self, image: image))
+        hosting.autoresizingMask = [.width, .height]
+        panel.contentView = hosting
+        overlayPanel = panel
+        overlayState = state
+        positionOverlay()
         panel.orderFrontRegardless()
         panel.makeKey()
-        bubblePanel = panel
-        bubbleState = state
         installEscMonitor()
     }
 
-    private func closeBubble() {
-        removeEscMonitor()
-        bubblePanel?.orderOut(nil)
-        bubblePanel = nil
-        bubbleState = .idle
+    private var overlaySize: NSSize {
+        let visible = overlayVisibleFrame
+        let imageSize = capturedImage?.size ?? captureRect.size
+        let width = min(max(max(imageSize.width, 360), 1), min(680, visible.width - 24))
+        let scaledImageHeight = width * max(imageSize.height, 1) / max(imageSize.width, 1)
+        let toolbarHeight: CGFloat = 46
+
+        if isComparisonEnabled {
+            let maximumImageHeight = max(140, visible.height - 210)
+            let imageHeight = min(max(scaledImageHeight, 140), maximumImageHeight)
+            let translationHeight = min(max(imageHeight * 0.55, 142), 230)
+            return NSSize(width: width, height: min(imageHeight + translationHeight + toolbarHeight, visible.height - 16))
+        }
+        return NSSize(width: width, height: min(max(scaledImageHeight, 180), visible.height - 16))
     }
 
-    /// 气泡可见期间 Esc 关闭（非激活面板成为 key window 即可收到）。
+    private var overlayVisibleFrame: NSRect {
+        let screen = NSScreen.screens.first { $0.frame.intersects(captureRect) } ?? NSScreen.main
+        return screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    }
+
+    private func resizeOverlay() {
+        guard let overlayPanel else { return }
+        overlayPanel.setContentSize(overlaySize)
+        positionOverlay()
+    }
+
+    private func positionOverlay() {
+        guard let overlayPanel else { return }
+        let size = overlayPanel.frame.size
+        let visible = overlayVisibleFrame
+        let preferredX = captureRect.midX - size.width / 2
+        // 对照时固定原图底边；普通模式则居中覆盖原截图位置。
+        let preferredY = isComparisonEnabled
+            ? captureRect.minY - 46
+            : captureRect.midY - size.height / 2
+        let origin = NSPoint(
+            x: min(max(preferredX, visible.minX + 8), visible.maxX - size.width - 8),
+            y: min(max(preferredY, visible.minY + 8), visible.maxY - size.height - 8)
+        )
+        overlayPanel.setFrameOrigin(origin)
+    }
+
+    private func closeOverlayPanel() {
+        removeEscMonitor()
+        overlayPanel?.orderOut(nil)
+        overlayPanel = nil
+        capturedImage = nil
+        recognizedOriginalText = nil
+        overlayState = .idle
+        isComparisonEnabled = false
+    }
+
     private func installEscMonitor() {
         guard escMonitor == nil else { return }
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53, let self, self.bubblePanel != nil {
+            if event.keyCode == 53, let self, self.overlayPanel != nil {
                 self.cancelRunning()
                 return nil
             }
