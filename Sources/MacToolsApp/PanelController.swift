@@ -33,6 +33,7 @@ final class Panel: NSPanel {
 final class PanelController: NSObject, NSWindowDelegate {
     let panel: Panel
     var onShow: (() -> Void)?
+    var onWillShow: (() -> Void)?
     /// 调试/自动化测试用：禁用失焦与失活自动关闭。
     var debugAutoCloseDisabled = false
 
@@ -91,6 +92,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func show(below button: NSStatusBarButton?) {
+        onWillShow?()
         position(below: button)
         // 非激活面板必须用 orderFrontRegardless：应用处于后台时也能直接显示（Maccy 同款）
         panel.orderFrontRegardless()
@@ -102,23 +104,13 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func position(below button: NSStatusBarButton?) {
-        let size = panel.frame.size
-        var topLeft: NSPoint
-        if let buttonWindow = button?.window, let button = button {
-            let buttonFrame = buttonWindow.convertToScreen(button.frame)
-            let screen = NSScreen.screens.first { $0.frame.intersects(buttonFrame) } ?? NSScreen.main
-            let minX = screen?.visibleFrame.minX ?? 8
-            let maxX = (screen?.visibleFrame.maxX ?? 1440) - size.width - 8
-            let x = max(minX, min(buttonFrame.maxX - size.width + 12, maxX))
-            topLeft = NSPoint(x: x, y: buttonFrame.minY - 6)
-        } else {
-            let screen = NSScreen.main
-            topLeft = NSPoint(
-                x: ((screen?.frame.width ?? 1440) - size.width) / 2,
-                y: (screen?.frame.height ?? 900) / 2 + size.height / 2
-            )
-        }
-        panel.setFrameTopLeftPoint(topLeft)
+        let buttonFrame = button?.window.map { $0.convertToScreen(button!.frame) }
+        let screen = buttonFrame.flatMap { rect in
+            NSScreen.screens.first { $0.frame.intersects(rect) }
+        } ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        panel.setFrame(NSRect(x: visible.minX + 8, y: visible.minY + 8,
+                             width: visible.width - 16, height: min(360, visible.height - 16)), display: true)
     }
 
     func windowDidResignKey(_ notification: Notification) {

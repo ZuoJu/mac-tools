@@ -71,6 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onOpenSettings: { [weak self] in self?.openSettings() }
             )
         )
+        panelController.onWillShow = { [weak self] in
+            self?.clipboardPasteTarget = ClipboardPasteTarget.capture()
+        }
         panelController.onShow = {
             NotificationCenter.default.post(name: .panelDidShow, object: nil)
         }
@@ -266,10 +269,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case HotKeyIDs.translateTrigger:
                 self.translationCoordinator.startCaptureTranslate()
             default:
-                break
+                if let action = FeatureShortcut.allCases.first(where: { $0.id == id }) {
+                    self.performShortcut(action)
+                }
             }
         }
         settings.applyHotKeysNow()
+    }
+
+    private func performShortcut(_ action: FeatureShortcut) {
+        switch action {
+        case .textTranslate: openModuleWindow(.translate)
+        case .menuBarPanel: openModuleWindow(.menuBar)
+        case .menuBarToggle: menuBarController.isManaging ? menuBarController.disable() : menuBarController.enable()
+        case .hiddenToggle:
+            if !menuBarController.isManaging { menuBarController.enable() }
+            if menuBarController.isManaging { menuBarController.toggleSection(.hidden) }
+        case .alwaysHiddenToggle:
+            if !menuBarController.isManaging { menuBarController.enable() }
+            if menuBarController.isManaging { menuBarController.toggleSection(.alwaysHidden) }
+        case .scrollPanel: openModuleWindow(.scroll)
+        case .scrollToggle: settings.scrollReverseEnabled.toggle()
+        case .trackpadPanel: openModuleWindow(.trackpad)
+        case .trackpadToggle: trackpadController.enabled.toggle()
+        case .clipboardToggle: settings.clipboardEnabled.toggle()
+        case .screenshotPanel: openModuleWindow(.screenshot)
+        case .closePinned: screenshotCoordinator.closeAllPinned()
+        case .settingsPanel: openSettings()
+        case .brightnessUp: trackpadController.adjustLevel(side: .brightness, delta: 0.05)
+        case .brightnessDown: trackpadController.adjustLevel(side: .brightness, delta: -0.05)
+        case .volumeUp: trackpadController.adjustLevel(side: .volume, delta: 0.05)
+        case .volumeDown: trackpadController.adjustLevel(side: .volume, delta: -0.05)
+        }
     }
 
     private func setupSettingsObservers() {
@@ -332,14 +363,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - 剪贴板复制交互
 
+    private var clipboardPasteTarget: ClipboardPasteTarget?
+
     private func handleCopy(_ item: ClipboardItem) {
-        clipboardStore.copyToPasteboard(item)
+        guard clipboardStore.copyToPasteboard(item) else { return }
         monitor.suppressCurrentChange()
         panelController.close()
-        if settings.autoPasteOnClick {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                Paster.pasteToActiveApp()
-            }
+        let target = clipboardPasteTarget
+        clipboardPasteTarget = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            target?.pasteIfStillFocused()
         }
     }
 
@@ -444,7 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeSettingsWindow() -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 568),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false

@@ -10,6 +10,8 @@ public struct ClipboardPanelView: View {
     @State private var searchText = ""
     @State private var kindFilter: ClipboardKind?
     @State private var newestFirst = true
+    @State private var favoritesOnly = false
+    public var onOpenSettings: (() -> Void)?
     @State private var confirmClear = false
     @FocusState private var searchFocused: Bool
 
@@ -17,8 +19,10 @@ public struct ClipboardPanelView: View {
         store: ClipboardStore,
         settings: SettingsStore,
         onCopyItem: @escaping (ClipboardItem) -> Void,
-        showsClearConfirmation: Bool = false
+        showsClearConfirmation: Bool = false,
+        onOpenSettings: (() -> Void)? = nil
     ) {
+        self.onOpenSettings = onOpenSettings
         self.store = store
         self.settings = settings
         self.onCopyItem = onCopyItem
@@ -27,19 +31,32 @@ public struct ClipboardPanelView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            searchField
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-            filterChips
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            Divider()
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                searchField.frame(width: 180)
+                filterChips
+                Spacer(minLength: 0)
+            }
+            .overlay(alignment: .trailing) {
+                HStack(spacing: 12) {
+                    Button { newestFirst.toggle() } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }.help(newestFirst ? "最新在前" : "最早在前")
+                    Button { confirmClear = true } label: {
+                        Image(systemName: "trash")
+                    }.help("清除未收藏条目")
+                    if let onOpenSettings {
+                        Button(action: onOpenSettings) { Image(systemName: "gearshape") }
+                            .help("设置")
+                    }
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 52)
             content
-            Divider()
-            footer
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
         }
+        .background(.regularMaterial)
+
         // 面板内自绘确认弹层：不用 confirmationDialog——它会以 sheet 形式接管 key
         // 状态，触发面板失焦自动关闭；overlay 留在同一窗口内，清除后面板保持打开。
         .overlay {
@@ -59,7 +76,7 @@ public struct ClipboardPanelView: View {
     }
 
     private var historyVisible: [ClipboardItem] {
-        filter(store.items.filter { !$0.pinned })
+        favoritesOnly ? [] : filter(store.items.filter { !$0.pinned })
     }
 
     private func filter(_ source: [ClipboardItem]) -> [ClipboardItem] {
@@ -107,93 +124,63 @@ public struct ClipboardPanelView: View {
     }
 
     private var filterChips: some View {
-        HStack(spacing: 6) {
-            chip(nil, title: "全部", count: totalCount)
-            ForEach(ClipboardKind.allCases) { kind in
-                chip(kind, title: kind.label, count: store.items.filter { $0.kind == kind }.count)
-            }
-            Spacer()
+        HStack(spacing: 8) {
+            chip(nil, title: "全部", color: .pink)
+            chip(.text, title: "文本", color: .green)
+            chip(.image, title: "图片", color: .orange)
+            chip(.files, title: "文件", color: .cyan)
             Button {
-                newestFirst.toggle()
+                favoritesOnly.toggle()
+                kindFilter = nil
             } label: {
-                Label(newestFirst ? "最新在前" : "最早在前", systemImage: "arrow.up.arrow.down")
-                    .font(.system(size: 11))
-                    .labelStyle(.titleAndIcon)
-            }
-            .buttonStyle(.borderless)
-            .help("切换时间排序")
+                Text("收藏")
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Color.purple.opacity(favoritesOnly ? 0.8 : 0.22), in: RoundedRectangle(cornerRadius: 6))
+            }.buttonStyle(.plain)
         }
     }
 
-    private func chip(_ kind: ClipboardKind?, title: String, count: Int) -> some View {
-        let selected = kindFilter == kind
+    private func chip(_ kind: ClipboardKind?, title: String, color: Color) -> some View {
+        let selected = kindFilter == kind && !favoritesOnly
         return Button {
-            kindFilter = selected ? nil : kind
+            kindFilter = kind
+            favoritesOnly = false
         } label: {
-            Text(count > 0 ? "\(title) \(count)" : title)
-                .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule().fill(selected ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.05))
-                )
-        }
-        .buttonStyle(.plain)
-        .foregroundColor(selected ? Color.accentColor : Color.secondary)
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(color.opacity(selected ? 0.8 : 0.22), in: RoundedRectangle(cornerRadius: 6))
+        }.buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var content: some View {
-        let pinned = pinnedVisible
-        let history = historyVisible
-        if pinned.isEmpty && history.isEmpty {
-            emptyState
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        let items = pinnedVisible + historyVisible
+        if items.isEmpty {
+            emptyState.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            // ScrollView + LazyVStack 而非 List：List 的 NSTableView 桥接层在行内容
-            // 没有系统文本/控件时整行原生点击不可靠（AXPress 正常、鼠标点击被吞），
-            // 自绘行头 + 普通滚动视图没有这层问题。
-            ScrollView {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    if !pinned.isEmpty {
-                        sectionHeader("已固定 · \(pinned.count)")
-                        ForEach(pinned) { row($0) }
+            GeometryReader { geometry in
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 10) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            ClipboardRowView(
+                                item: item,
+                                thumbnail: item.kind == .image ? store.image(for: item) : nil,
+                                index: index + 1,
+                                onCopy: { onCopyItem(item) },
+                                onTogglePin: { store.togglePin(item.id) },
+                                onDelete: { store.remove(item.id) }
+                            )
+                            .frame(width: 286, height: max(180, geometry.size.height - 40))
+                        }
                     }
-                    if !history.isEmpty {
-                        sectionHeader("\(historyHeaderTitle) · \(history.count)")
-                        ForEach(history) { row($0) }
-                    }
+                    .frame(height: max(180, geometry.size.height - 40), alignment: .top)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 24)
                 }
-                .padding(.vertical, 4)
             }
-            .scrollIndicators(.hidden)
-        }
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.background)
-    }
-
-    private var historyHeaderTitle: String {
-        newestFirst ? "历史（最近复制在前）" : "历史（最早复制在前）"
-    }
-
-    private func row(_ item: ClipboardItem) -> some View {
-        ClipboardRowView(
-            item: item,
-            thumbnail: item.kind == .image ? store.image(for: item) : nil,
-            onCopy: { onCopyItem(item) },
-            onTogglePin: { store.togglePin(item.id) },
-            onDelete: { store.remove(item.id) }
-        )
-        .overlay(alignment: .bottom) {
-            Divider().padding(.leading, 68)
         }
     }
 
@@ -212,25 +199,6 @@ public struct ClipboardPanelView: View {
         .padding(.bottom, 30)
     }
 
-    private var footer: some View {
-        HStack {
-            Text(visibleCount == totalCount
-                 ? "共 \(totalCount) 条 · 点击条目复制并关闭面板"
-                 : "显示 \(visibleCount) / \(totalCount) 条 · 点击条目复制并关闭面板")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Spacer()
-            Button {
-                confirmClear = true
-            } label: {
-                Label("清除未固定", systemImage: "trash")
-                    .font(.system(size: 11))
-            }
-            .buttonStyle(.borderless)
-            .disabled(store.items.filter { !$0.pinned }.isEmpty)
-        }
-    }
-
     private var clearConfirmation: some View {
         ZStack {
             Rectangle()
@@ -241,10 +209,10 @@ public struct ClipboardPanelView: View {
                 Image(systemName: "trash")
                     .font(.system(size: 26, weight: .medium))
                     .foregroundStyle(.red)
-                Text("确定清除所有未固定的历史条目？")
+                Text("确定清除所有未收藏的历史条目？")
                     .font(.system(size: 14, weight: .semibold))
                     .multilineTextAlignment(.center)
-                Text("已固定条目将保留，清除后不可恢复。")
+                Text("已收藏条目将保留，清除后不可恢复。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -263,7 +231,7 @@ public struct ClipboardPanelView: View {
                         confirmClear = false
                         store.clearAll(keepingPinned: true)
                     } label: {
-                        Text("清除未固定条目")
+                        Text("清除未收藏条目")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.white)
                             .frame(width: 118, height: 26)

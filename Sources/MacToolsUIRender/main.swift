@@ -142,7 +142,7 @@ managedController.injectForPreview(
 
 render(
     ClipboardPanelView(store: clipStore, settings: .shared, onCopyItem: { _ in }),
-    size: NSSize(width: 480, height: 600),
+    size: NSSize(width: 1440, height: 360),
     name: "clipboard-panel.png"
 )
 
@@ -150,7 +150,7 @@ render(
 
 render(
     ClipboardPanelView(store: clipStore, settings: .shared, onCopyItem: { _ in }, showsClearConfirmation: true),
-    size: NSSize(width: 480, height: 600),
+    size: NSSize(width: 1440, height: 360),
     name: "clipboard-panel-clear-confirm.png"
 )
 
@@ -163,9 +163,11 @@ let emptyStore = ClipboardStore(
 )
 render(
     ClipboardPanelView(store: emptyStore, settings: .shared, onCopyItem: { _ in }),
-    size: NSSize(width: 480, height: 600),
+    size: NSSize(width: 1440, height: 360),
     name: "clipboard-panel-empty.png"
 )
+
+if CommandLine.arguments.contains("--clipboard-only") { exit(0) }
 
 // MARK: - 菜单栏图标面板（未接管）
 

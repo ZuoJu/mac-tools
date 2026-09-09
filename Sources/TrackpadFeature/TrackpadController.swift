@@ -83,7 +83,8 @@ public final class TrackpadController: ObservableObject {
         guard enabled, !suspended else { stopHardware(); status = enabled ? "睡眠中" : "已关闭"; return }
         guard !isRunning else { return }
         guard AXHelper.isTrusted() else { status = "等待辅助功能授权"; return }
-        let mask = (CGEventMask(1) << CGEventType.mouseMoved.rawValue) | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue)
+        let mask = [CGEventType.mouseMoved, .scrollWheel, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+            .reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         guard let newTap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, context in
                 guard let context else { return Unmanaged.passUnretained(event) }
@@ -92,7 +93,9 @@ public final class TrackpadController: ObservableObject {
                     owner.resetGesture()
                     if let tap = owner.tap { CGEvent.tapEnable(tap: tap, enable: true) }
                 }
-                if type == .leftMouseDown { owner.cancelUntilLift() }
+                if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type) { owner.cancelUntilLift() }
+                if type == .scrollWheel, owner.cursorLock.isLocked,
+                   Date().timeIntervalSince(owner.lastFrame) < 0.25 { return nil }
                 if type == .mouseMoved, owner.cursorLock.isLocked,
                    Date().timeIntervalSince(owner.lastFrame) < 0.25 {
                     if owner.cursorLock.holdPosition() { return nil }
@@ -180,12 +183,17 @@ public final class TrackpadController: ObservableObject {
         let delta = min(0.08, max(-0.08, pendingDelta))
         pendingDelta = 0
         lastAdjustmentAt = Date()
+        lastAdjustmentDevice = deviceName
+        adjustLevel(side: change.side, delta: delta)
+    }
+
+    public func adjustLevel(side: EdgeGesture.Side, delta: Double) {
+        guard delta.isFinite else { return }
         do {
-            let value = try change.side == .brightness ? levels.adjustBrightness(by: delta) : levels.adjustVolume(by: delta)
-            lastAdjustment = "\(change.side == .brightness ? "亮度" : "音量") \(Int((value * 100).rounded()))%"
-            lastAdjustmentDevice = deviceName
-            levelHUD.show(side: change.side, value: value)
-            nativeOSDAvailable = NativeLevelOSD.show(side: change.side, value: value)
+            let value = try side == .brightness ? levels.adjustBrightness(by: delta) : levels.adjustVolume(by: delta)
+            lastAdjustment = "\(side == .brightness ? "亮度" : "音量") \(Int((value * 100).rounded()))%"
+            levelHUD.show(side: side, value: value)
+            nativeOSDAvailable = NativeLevelOSD.show(side: side, value: value)
             if nativeOSDAvailable == false { lastAdjustment += " · 系统提示暂不可用" }
         } catch {
             lastAdjustment = error.localizedDescription

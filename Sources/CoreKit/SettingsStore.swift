@@ -108,8 +108,21 @@ public final class SettingsStore: ObservableObject {
         }
     }
 
+    @Published public private(set) var featureHotKeys: [String: KeyCombo]
+
+    public func setHotKey(_ combo: KeyCombo?, for action: FeatureShortcut) {
+        featureHotKeys[action.rawValue] = combo
+        if let data = try? JSONEncoder().encode(featureHotKeys) {
+            defaults.set(data, forKey: "shortcuts.features")
+        }
+        if let combo { HotKeyManager.shared.register(id: action.id, combo: combo) }
+        else { HotKeyManager.shared.unregister(id: action.id) }
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        featureHotKeys = defaults.data(forKey: "shortcuts.features")
+            .flatMap { try? JSONDecoder().decode([String: KeyCombo].self, from: $0) } ?? [:]
 
         theme = defaults.string(forKey: Keys.theme).flatMap(AppTheme.init(rawValue:)) ?? .system
         clipboardEnabled = defaults.object(forKey: Keys.clipboardEnabled) as? Bool ?? true
@@ -171,6 +184,10 @@ public final class SettingsStore: ObservableObject {
 
     /// 组合根完成回调接线后调用，注册当前全部全局快捷键。
     public func applyHotKeysNow() {
+        for action in FeatureShortcut.allCases {
+            if let combo = featureHotKeys[action.rawValue] { HotKeyManager.shared.register(id: action.id, combo: combo) }
+            else { HotKeyManager.shared.unregister(id: action.id) }
+        }
         HotKeyManager.shared.register(id: HotKeyIDs.clipboardPanel, combo: clipboardHotKey)
         HotKeyManager.shared.register(id: HotKeyIDs.screenshotTrigger, combo: screenshotTriggerHotKey)
         HotKeyManager.shared.register(id: HotKeyIDs.translateTrigger, combo: translateTriggerHotKey)

@@ -1002,6 +1002,20 @@ runMenuBarLayoutTests(runner)
 runMenuBarPersistenceTests(runner, tempRoot: tempRoot)
 runScrollLogicTests(runner)
 runHotKeyTests(runner)
+do {
+    let domain = "MacToolsTest.shortcuts.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: domain)!
+    defer { defaults.removePersistentDomain(forName: domain) }
+    let settings = SettingsStore(defaults: defaults)
+    runner.expectTrue(settings.featureHotKeys.isEmpty, "新增快捷键默认不占用组合")
+    let combo = KeyCombo(keyCode: 17, carbonModifiers: UInt32(controlKey | optionKey | shiftKey), display: "⌃⌥⇧T")
+    settings.setHotKey(combo, for: .trackpadToggle)
+    let reloaded = SettingsStore(defaults: defaults)
+    runner.expectEqual(reloaded.featureHotKeys[FeatureShortcut.trackpadToggle.rawValue], combo, "快捷键重启后保留")
+    reloaded.setHotKey(nil, for: .trackpadToggle)
+    runner.expectTrue(SettingsStore(defaults: defaults).featureHotKeys.isEmpty, "清除快捷键会持久化")
+    runner.expectEqual(Set(FeatureShortcut.allCases.map(\.id)).count, FeatureShortcut.allCases.count, "全部功能快捷键具有独立标识")
+}
 runTrackpadTests(runner)
 runHotKeyConflictTests(runner)
 runAnnotationTests(runner)

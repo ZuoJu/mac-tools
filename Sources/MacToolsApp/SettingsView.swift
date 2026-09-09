@@ -6,7 +6,7 @@ import ScrollFeature
 import ScreenshotFeature
 import TranslateFeature
 
-/// 设置窗口：通用 / 剪贴板 / 翻译 / 菜单栏图标 / 滚轮方向 / 截图 / 关于。
+/// 设置窗口：通用 / 快捷键 / 剪贴板 / 翻译 / 菜单栏图标 / 滚轮方向 / 截图 / 关于。
 struct SettingsView: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var clipboardStore: ClipboardStore
@@ -31,25 +31,35 @@ struct SettingsView: View {
         case failure(String)
     }
 
+    private enum SettingsTab: String, CaseIterable {
+        case general = "通用", shortcuts = "快捷键", clipboard = "剪贴板", translate = "翻译"
+        case menuBar = "菜单栏图标", scroll = "滚轮方向", screenshot = "截图", about = "关于"
+    }
+    @State private var selectedTab: SettingsTab = .general
+
     var body: some View {
-        TabView {
-            generalTab
-                .tabItem { Label("通用", systemImage: "gearshape") }
-            clipboardTab
-                .tabItem { Label("剪贴板", systemImage: "doc.on.clipboard") }
-            translateTab
-                .tabItem { Label("翻译", systemImage: "translate") }
-            menuBarTab
-                .tabItem { Label("菜单栏图标", systemImage: "menubar.rectangle") }
-            scrollTab
-                .tabItem { Label("滚轮方向", systemImage: "computermouse") }
-            screenshotTab
-                .tabItem { Label("截图", systemImage: "camera.viewfinder") }
-            aboutTab
-                .tabItem { Label("关于", systemImage: "info.circle") }
+        VStack(spacing: 0) {
+            Picker("设置分类", selection: $selectedTab) {
+                ForEach(SettingsTab.allCases, id: \.self) { tab in Text(tab.rawValue).tag(tab) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(16)
+            Divider()
+            Group {
+                switch selectedTab {
+                case .general: generalTab
+                case .shortcuts: shortcutsTab
+                case .clipboard: clipboardTab
+                case .translate: translateTab
+                case .menuBar: menuBarTab
+                case .scroll: scrollTab
+                case .screenshot: screenshotTab
+                case .about: aboutTab
+                }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 560, height: 480)
-        .padding(.top, 8)
+        .frame(width: 760, height: 560)
     }
 
     // MARK: - 通用
@@ -83,41 +93,57 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
             }
             Section("快捷键") {
-                HStack {
-                    Text("剪贴板面板")
-                    Spacer()
-                    HotKeyRecorder(combo: $settings.clipboardHotKey)
-                }
-                HStack {
-                    Text("状态")
-                    Spacer()
-                    Text(hotKeyStatusText)
-                        .font(.caption)
-                        .foregroundStyle(hotKeyManager.isRegistered ? Color.green : Color.red)
-                }
-                if let error = hotKeyManager.lastRegistrationError {
-                    HStack {
-                        Text("注册问题")
-                        Spacer()
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .multilineTextAlignment(.trailing)
-                    }
-                }
-                HStack {
-                    Text("按键诊断")
-                    Spacer()
-                    Text(hotKeyDiagnosticsText)
-                        .font(.caption)
-                        .foregroundStyle(hotKeyManager.lastFired == nil ? Color.secondary : Color.green)
-                }
-                Text("全局快捷键，随时呼出 / 收起剪贴板面板。采用与 Maccy 相同的系统级热键注册：无需任何隐私权限，聚焦其他应用时同样生效，命中组合会被系统吞掉、不会传给前台应用。默认 ⌥⇧V，与 Maccy 的 ⌘⇧V 错开；若被其他工具占用会提示更换组合。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text("全部功能的快捷键可在上方“快捷键”页统一设置，修改后立即生效。")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var shortcutsTab: some View {
+        Form {
+            Section("全局快捷键") {
+                hotKeyRow(title: "剪贴板面板", binding: $settings.clipboardHotKey, systemHint: "")
+                conflictHint(combo: settings.clipboardHotKey, name: "剪贴板面板")
+                hotKeyRow(title: "触发截图", binding: $settings.screenshotTriggerHotKey, systemHint: "")
+                conflictHint(combo: settings.screenshotTriggerHotKey, name: "截图触发")
+                hotKeyRow(title: "截图翻译", binding: $settings.translateTriggerHotKey, systemHint: "")
+                conflictHint(combo: settings.translateTriggerHotKey, name: "截图翻译")
+                ForEach(FeatureShortcut.allCases) { action in
+                    HStack {
+                        Text(action.title)
+                        Spacer()
+                        HotKeyRecorder(combo: Binding(
+                            get: { settings.featureHotKeys[action.rawValue] ?? KeyCombo(keyCode: 0, carbonModifiers: 0, display: "未设置") },
+                            set: { settings.setHotKey($0, for: action) }
+                        ))
+                        if settings.featureHotKeys[action.rawValue] != nil {
+                            Button { settings.setHotKey(nil, for: action) } label: {
+                                Image(systemName: "xmark.circle")
+                            }.buttonStyle(.borderless).help("清除快捷键")
+                        }
+                    }
+                    if let combo = settings.featureHotKeys[action.rawValue] {
+                        conflictHint(combo: combo, name: action.title)
+                    }
+                }
+            }
+            Section("截图后操作（仅截图会话生效）") {
+                hotKeyRow(title: "固定显示", binding: $settings.screenshotPinHotKey, systemHint: "")
+                conflictHint(combo: settings.screenshotPinHotKey, name: "截图·固定显示")
+                hotKeyRow(title: "复制", binding: $settings.screenshotCopyHotKey, systemHint: "")
+                conflictHint(combo: settings.screenshotCopyHotKey, name: "截图·复制")
+                hotKeyRow(title: "取消并丢弃", binding: $settings.screenshotDiscardHotKey, systemHint: "")
+                conflictHint(combo: settings.screenshotDiscardHotKey, name: "截图·丢弃")
+            }
+            Section("状态") {
+                Text(hotKeyStatusText).font(.caption)
+                if let error = hotKeyManager.lastRegistrationError { Text(error).foregroundStyle(.orange) }
+                Text(hotKeyDiagnosticsText).font(.caption)
+                Text("点击按钮后按下含修饰键的组合；Esc 取消。新增功能默认未设置，设置后在后台也生效；亮度和声音每次调节 5%。橙色提示表示快捷键冲突。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }.formStyle(.grouped)
     }
 
     private var hotKeyStatusText: String {
@@ -136,7 +162,8 @@ struct SettingsView: View {
             return "启动后尚未捕获到按键"
         }
         let seconds = Int(Date().timeIntervalSince(last.at))
-        let name = last.id == HotKeyIDs.clipboardPanel ? "剪贴板面板" : "截图触发"
+        let name = FeatureShortcut.allCases.first { $0.id == last.id }?.title
+            ?? [HotKeyIDs.clipboardPanel: "剪贴板面板", HotKeyIDs.screenshotTrigger: "截图触发", HotKeyIDs.translateTrigger: "截图翻译"][last.id] ?? last.id
         return seconds < 60 ? "\(seconds) 秒前捕获（\(name)）" : "较久前捕获（\(name)）"
     }
 
@@ -176,7 +203,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Section("交互") {
-                Toggle("点击条目后自动粘贴到前台应用", isOn: $settings.autoPasteOnClick)
+                Text("双击条目：有输入焦点时粘贴，否则仅复制到剪贴板")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("需要辅助功能权限；关闭时仅复制到剪贴板")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -483,7 +511,9 @@ struct SettingsView: View {
             .init(name: "截图·固定显示", combo: settings.screenshotPinHotKey),
             .init(name: "截图·复制", combo: settings.screenshotCopyHotKey),
             .init(name: "截图·丢弃", combo: settings.screenshotDiscardHotKey),
-        ]
+        ] + FeatureShortcut.allCases.compactMap { action in
+            settings.featureHotKeys[action.rawValue].map { .init(name: action.title, combo: $0) }
+        }
     }
 
     private func hotKeyRow(title: String, binding: Binding<KeyCombo>, systemHint: String) -> some View {
